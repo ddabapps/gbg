@@ -192,7 +192,8 @@ begin
   if E is EUsageError then
   begin
     Writeln('Usage Error: ' + E.Message);
-    Usage;
+    Writeln;
+    Writeln('Enter gbg with no parameters for help');
     ExitCode := TExitCode.Usage;
   end
   else if E is ECancellation then
