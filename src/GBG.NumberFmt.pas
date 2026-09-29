@@ -8,21 +8,36 @@ uses
 
 type
 
-  TNumberFmt = record
-  strict private
+  TMemSizeSymbols = record
     var
       fValue: UInt64;
     class var
-      fIECMap: TDictionary<string,UInt64>;
+      fSymbolMap: TDictionary<string,UInt64>;
   public
     class constructor Create;
     class destructor Destroy;
-    constructor Create(const AValue: UInt64);
-    property Value: UInt64 read fValue write fValue;
-    function ToString: string;
-    function TryParse(ANumStr: string): Boolean; overload;
+    ///  <summary>Attempts to convert a memory size symbol to the number of
+    ///  bytes it represents.</summary>
+    ///  <param name="APrefix">[in] Prefix to convert.</param>
+    ///  <param name="ABytes">[in] Number of bytes represented by symbol. If
+    ///  <c>APrefix</c> is not recognised then the conversion fails and
+    ///  <c>ABytes</c> is undefined.</param>
+    ///  <returns><c>Boolean</c>. <c>True</c> if the conversion succeeded or
+    ///  <c>False</c> if it failed.</returns>
+    class function TryPrefixToBytes(const APrefix: string; out ABytes: UInt64):
+      Boolean; static;
+  end;
+
+  TNumberFmt = record
+  strict private
+    class function TryCleanIntStr(const ANumStr: string;
+      out ACleanedNumStr: string): Boolean; static;
+  public
+    class function FormatNumber(const AValue: UInt64): string; static;
     class function TryParse(ANumStr: string; out AValue: UInt64): Boolean;
       overload; static;
+    class function TryParseUInt(const ANumStr: string; out AValue: UInt64):
+      Boolean; static;
   end;
 
   ENumberFmt = class(Exception);
@@ -37,19 +52,92 @@ uses
 
 { TNumberFmt }
 
-constructor TNumberFmt.Create(const AValue: UInt64);
+class function TNumberFmt.FormatNumber(const AValue: UInt64): string;
 begin
-  fValue := AValue;
+  Result := Format('%.0n', [Extended(AValue)], TFormatSettings.Create);
 end;
 
-class destructor TNumberFmt.Destroy;
+class function TNumberFmt.TryCleanIntStr(const ANumStr: string;
+  out ACleanedNumStr: string): Boolean;
 begin
-  fIECMap.Free;
+  ACleanedNumStr := ANumStr.Trim;
+
+  // Empty string is not a valid number
+  if ACleanedNumStr.IsEmpty then
+    Exit(False);
+
+  // Check for empty "thousands" group, using correct separator for locale
+  // empty group within string (e.g. 99,99,,99)
+  var Separator := TFormatSettings.Create.ThousandSeparator;
+  var DoubleSeparator := Separator + Separator;
+  if ACleanedNumStr.Contains(DoubleSeparator) then
+    Exit(False);
+  // leading and trailing empty groups (e.g. ,999,)
+  if ACleanedNumStr.StartsWith(Separator)
+    or ACleanedNumStr.EndsWith(Separator) then
+    Exit(False);
+
+  // Remove thousands separator: we don't assume size of grouping since this
+  // varies across locales
+  ACleanedNumStr := ACleanedNumStr.Replace(
+    Separator, '', [TReplaceFlag.rfReplaceAll]
+  );
+  Result := True;
 end;
 
-class constructor TNumberFmt.Create;
+class function TNumberFmt.TryParse(ANumStr: string;
+  out AValue: UInt64): Boolean;
 begin
-  fIECMap := TDictionary<string,UInt64>.Create(
+ var NumStr := ANumStr.Trim;
+
+  // Split number from any memory symbol suffix
+  var Idx := ANumStr.Length;
+  while (Idx >= 1) and ANumStr[Idx].IsLetter do
+    Dec(Idx);
+  var MemSymbol := ANumStr.Substring(Idx);
+  var Number := ANumStr.Substring(0, ANumStr.Length - MemSymbol.Length);
+
+  // Parse number part
+  var ParsedNumber: UInt64;
+  if not TryParseUInt(Number, ParsedNumber) then
+    Exit(False);
+
+  // Convert the memory symbol to its related a multiplier
+  var Multiplier: UInt64;
+  if MemSymbol.IsEmpty then
+    Multiplier := 1
+  else
+  begin
+    if not TMemSizeSymbols.TryPrefixToBytes(MemSymbol, Multiplier) then
+      Exit(False);
+  end;
+
+  // Calculate number of bytes by applying multiplier to entered number
+  if High(UInt64) div Multiplier < ParsedNumber then
+    Exit(False);  // Multiplier * ParsedNumber to big for UInt64!
+  AValue := Multiplier * ParsedNumber;
+
+  Result := True;
+ end;
+
+class function TNumberFmt.TryParseUInt(const ANumStr: string;
+  out AValue: UInt64): Boolean;
+begin
+  var CleanedNumStr: string;
+
+  // Validate string format & remove thousands separator
+  if not TryCleanIntStr(ANumStr, CleanedNumStr) then
+    Exit(False);
+
+  // Convert to number
+  Result := TryStrToUInt64(CleanedNumStr, AValue)
+end;
+
+{ TMemSizeSymbols }
+
+class constructor TMemSizeSymbols.Create;
+begin
+  fSymbolMap := TDictionary<string,UInt64>.Create(
     TDelegatedEqualityComparer<string>.Create(
       function (const Left, Right: string): Boolean
       begin
@@ -63,99 +151,33 @@ begin
       end
     )
   );
-  fIECMap.Add('Kb',  TMemUnits.OneKB);    // kilobyte
-  fIECMap.Add('KiB', TMemUnits.OneKiB);   // kibibyte
-  fIECMap.Add('MB',  TMemUnits.OneMB);	  // megabyte
-  fIECMap.Add('MiB', TMemUnits.OneMiB);   // mebibyte
-  fIECMap.Add('GB',  TMemUnits.OneGB);    // gigabyte
-  fIECMap.Add('GiB', TMemUnits.OneGiB);   // gibibyte
+  // Only the following subset of IEC and SI memory size symbols are supported
+  // See https://help.creoline.com/en/doc/memory-sizes-zjTUhueSK6
+  // IEC symbols
+  fSymbolMap.Add('KiB', TMemUnits.OneKiB);    // kibibyte
+  fSymbolMap.Add('MiB', TMemUnits.OneMiB);    // mebibyte
+  fSymbolMap.Add('GiB', TMemUnits.OneGiB);    // gibibyte
+  // SI symbols
+  fSymbolMap.Add('Kb',  TMemUnits.OneKB);     // kilobyte
+  fSymbolMap.Add('MB',  TMemUnits.OneMB);	    // megabyte
+  fSymbolMap.Add('GB',  TMemUnits.OneGB);     // gigabyte
 end;
 
-function TNumberFmt.ToString: string;
+class destructor TMemSizeSymbols.Destroy;
 begin
-  Result := Format('%.0n', [Extended(fValue)], TFormatSettings.Create);
+  fSymbolMap.Free;
 end;
 
-class function TNumberFmt.TryParse(ANumStr: string;
-  out AValue: UInt64): Boolean;
+class function TMemSizeSymbols.TryPrefixToBytes(const APrefix: string;
+  out ABytes: UInt64): Boolean;
 begin
-  var NF: TNumberFmt;
-  Result := NF.TryParse(ANumStr);
-  if Result then
-    AValue := NF.Value;
-end;
-
-function TNumberFmt.TryParse(ANumStr: string): Boolean;
-
-  // Check the validity of the parts of number split by decimal separator
-  function CheckNumParts(const Parts: array of string): Boolean;
-  begin
-    if Length(Parts) = 0 then
-      Exit(False);
-    if not (Length(Parts[0]) in [1..3]) then
-      Exit(False);
-    for var Idx := 1 to Pred(Length(Parts)) do
-    begin
-      if Length(Parts[Idx]) <> 3 then
-        Exit(False);
-    end;
-    Result := True;
-  end;
-
-begin
-  // Format is number, optionally with thousands separator, optionally ending in
-  // a IEC symbol
-
-  // get format settings for current locale to get correct decimal separator
-  var Fmt := TFormatSettings.Create;
-
-  // split string at decimal separators
-  var Parts := ANumStr.Split([Fmt.ThousandSeparator]);
-
-  // split out any IEC symbol from last part of split string
-  var LastPart := Parts[High(Parts)];
-  if LastPart.IsEmpty then
-    Exit(False);  // means number ended in decimal separator
-  // collect digits from LastPart
-  var ChIdx: Integer := 1;
-  var Digits := string.Empty;
-  while (ChIdx <= Length(LastPart)) and (LastPart[ChIdx].IsDigit) do
-  begin
-    Digits := Digits + LastPart[ChIdx];
-    Inc(ChIdx);
-  end;
-  // replace last part with only digits
-  Parts[High(Parts)] := Digits;
-  // collect any characters that make up IEC symbol
-  var Symbol := string.Empty;
-  while ChIdx <= Length(LastPart) do
-  begin
-    Symbol := Symbol + LastPart[ChIdx];
-    Inc(ChIdx);
-  end;
-
-  // check the number parts if more than 1
-  if (Length(Parts) > 1) and not CheckNumParts(Parts) then
-    Exit(False);
-
-  // recombine and parse the number
-  var NumStr := string.Join('', Parts);
-  var ParsedNumber: UInt64;
-  if not TryStrToUInt64(NumStr, ParsedNumber) then
-    Exit(False);
-
-  // get the bytes multiplier from IEC symbol
-  var Multiplier: UInt64;
-  if Symbol.IsEmpty then
-    Multiplier := 1
-  else if not fIECMap.TryGetValue(Symbol, Multiplier) then
-    Exit(False);
-
-  // calculate number of bytes after applying multiplier
-  if High(UInt64) div Multiplier < ParsedNumber then
-    Exit(False);  // Multiplier * ParsedNumber to big for UInt64!
-  fValue := Multiplier * ParsedNumber;
   Result := True;
+  var Prefix := APrefix.Trim;
+  if Prefix.IsEmpty then
+    ABytes := 1
+  else if not fSymbolMap.TryGetValue(Prefix, ABytes) then
+    Exit(False);
 end;
 
 end.
+

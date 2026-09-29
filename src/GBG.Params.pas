@@ -136,7 +136,7 @@ begin
         if not InRange(fFileSize, 0, fMaxFileSize) then
           raise EUsageError.CreateFmt(
             'Invalid file size. Must be a whole number in range 0 to %s',
-            [TNumberFmt.Create(fMaxFileSize).ToString]
+            [TNumberFmt.FormatNumber(fMaxFileSize)]
           );
         fIsFileSizeSet := True;
       end

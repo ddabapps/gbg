@@ -74,7 +74,7 @@ begin
         if not GetConfirmation(
           Format(
             'Requested size is greater than %s bytes. Continue? [y/N]',
-            [TNumberFmt.Create(MaxUnchallengedFileSize).ToString]
+            [TNumberFmt.FormatNumber(MaxUnchallengedFileSize)]
           ),
           'Y'
         ) then
@@ -82,7 +82,7 @@ begin
       TLargeFileAction.Error:
         raise EFileTooBig.CreateFmt(
           'Output file is greater than %s bytes. Use -L option to allow.',
-          [TNumberFmt.Create(MaxUnchallengedFileSize).ToString]
+          [TNumberFmt.FormatNumber(MaxUnchallengedFileSize)]
         );
       TLargeFileAction.Allow:
         ; // do nothing - allow large file to be createed
@@ -300,9 +300,9 @@ begin
     Format(
       HelpText,
       [
-        TNumberFmt.Create(MaxSupportedFileSize).ToString,
-        TNumberFmt.Create(TParams.MaxRandomDataChunkSize).ToString,
-        TNumberFmt.Create(TParams.DefRandomDataChunkSize).ToString
+        TNumberFmt.FormatNumber(MaxSupportedFileSize),
+        TNumberFmt.FormatNumber(TParams.MaxRandomDataChunkSize),
+        TNumberFmt.FormatNumber(TParams.DefRandomDataChunkSize)
       ]
     )
   );
